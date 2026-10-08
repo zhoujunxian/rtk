@@ -263,17 +263,21 @@ fn build_pytest_summary(
         }
 
         // Show relevant error lines (assertions, errors, file locations)
+        // P1 optimization: increased from 3→5 lines, E-lines get 200 chars (assert diff
+        // contains Expected/Actual values the agent needs to decide fix direction)
         let mut relevant_lines = 0;
         for line in &lines[1..] {
             let line_lower = line.to_lowercase();
+            let is_e_line = line.trim().starts_with('E');
             let is_relevant = line.trim().starts_with('>')
-                || line.trim().starts_with('E')
+                || is_e_line
                 || line_lower.contains("assert")
                 || line_lower.contains("error")
                 || line.contains(".py:");
 
-            if is_relevant && relevant_lines < 3 {
-                result.push_str(&format!("     {}\n", truncate(line, 100)));
+            if is_relevant && relevant_lines < 5 {
+                let max_chars = if is_e_line { 200 } else { 100 };
+                result.push_str(&format!("     {}\n", truncate(line, max_chars)));
                 relevant_lines += 1;
             }
         }

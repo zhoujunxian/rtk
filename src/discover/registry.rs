@@ -2453,7 +2453,6 @@ mod tests {
                 "rtk pre-commit",
                 "rtk prettier",
                 "rtk ps",
-                "rtk pytest",
                 "rtk quarto",
                 "rtk rake",
                 "rtk rg",
@@ -3527,9 +3526,22 @@ mod tests {
 
     #[test]
     fn test_rewrite_pipe_producer_batch_rules_rewritten() {
+        // #3207 — pytest piped to a consumer stays raw: the model's own
+        // `| tail -N` selects the raw summary lines it wants; rewriting the
+        // producer to rtk pytest moves the summary to the top and the tail
+        // slice drops it.
+        assert_eq!(rewrite_command_no_prefixes("pytest | tail -20", &[]), None);
         assert_eq!(
-            rewrite_command_no_prefixes("pytest | tail -20", &[]),
-            Some("rtk pytest | tail -20".into())
+            rewrite_command_no_prefixes(
+                "python3 -m pytest tests/ -q 2>&1 | tail -8",
+                &[]
+            ),
+            None
+        );
+        // Standalone pytest (no pipe) is still rewritten for compression.
+        assert_eq!(
+            rewrite_command_no_prefixes("pytest tests/ -q", &[]),
+            Some("rtk pytest tests/ -q".into())
         );
         assert_eq!(
             rewrite_command_no_prefixes("terraform plan | head -40", &[]),

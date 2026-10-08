@@ -194,9 +194,21 @@ fn run_diff(
 
     let diff_result = exec_capture(&mut diff_cmd).context("Failed to run git diff")?;
 
+    // P3 optimization: small diffs (≤1 file, ≤50 changed lines) output raw diff
+    // with just a stat header — avoids format change that triggers re-verification
+    let diff_line_count = diff_result.stdout.lines().count();
+    let changed_files = result.stdout.trim().lines()
+        .filter(|l| l.contains("|") && !l.contains("file") && !l.contains("changed"))
+        .count();
+
     let printed = if !diff_result.stdout.is_empty() {
-        let compacted = compact_diff(&diff_result.stdout, max_lines.unwrap_or(500));
-        format!("{}\n\nChanges:\n{}", result.stdout.trim(), compacted)
+        if changed_files <= 1 && diff_line_count < 50 {
+            // Small diff: raw diff with stat header (agent-familiar format)
+            format!("{}\n\n{}", result.stdout.trim(), diff_result.stdout.trim())
+        } else {
+            let compacted = compact_diff(&diff_result.stdout, max_lines.unwrap_or(500));
+            format!("{}\n\nChanges:\n{}", result.stdout.trim(), compacted)
+        }
     } else {
         result.stdout.trim().to_string()
     };

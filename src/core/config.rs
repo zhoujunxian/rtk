@@ -227,7 +227,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             grep_max_results: 200,
-            grep_max_per_file: 25,
+            grep_max_per_file: 50,
             status_max_files: 15,
             status_max_untracked: 10,
             passthrough_max_chars: 2000,

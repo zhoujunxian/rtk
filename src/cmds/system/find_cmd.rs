@@ -638,6 +638,31 @@ fn render(
         return shown;
     }
 
+    // P10: small result sets (≤20 files) — emit the plain full-path list,
+    // matching native `find`. The grouped format (`2F 1D:` header, dir-grouped
+    // lines with 50-char path truncation, `ext:` summary) is shorter by raw
+    // token count on tiny sets — so the never-worse guard picks it — but it
+    // destroys path copy-paste usability exactly when the model asked for a
+    // handful of specific files (44-instance experiment: agents then re-ran
+    // find or fell back to ls to recover the full paths).
+    if files.len() <= 20 {
+        let ordered = display_ordered(&files);
+        let hint = if files.len() > max_results && !max_explicit {
+            crate::core::tee::force_tee_tail_hint(&ordered.join("\n"), "find", max_results + 1)
+        } else {
+            None
+        };
+        let listing = build_capped_listing(&ordered, max_results);
+        let mut plain = listing.trim_end_matches('\n').to_string();
+        if let Some(note) = &note {
+            plain.push('\n');
+            plain.push_str(note);
+        }
+        let shown = crate::core::runner::emit_guarded(&plain, hint.as_deref(), &plain);
+        timer.track(track_cmd, "rtk find", raw_output, &shown);
+        return shown;
+    }
+
     let ordered = display_ordered(&files);
 
     let by_dir = group_by_dir(&files);

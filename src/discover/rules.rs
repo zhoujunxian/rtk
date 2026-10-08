@@ -511,7 +511,12 @@ pub const RULES: &[RtkRule] = &[
     RtkRule {
         pattern: r"^(python[0-9.]*\s+-m\s+)?pytest(\s|$)",
         rtk_cmd: "rtk pytest",
-        pipeline_safety: PipelineSafety::ProducerOnly,
+        // #3207 — never rewrite pytest as a pipeline producer: agents pipe
+        // `pytest … | tail -N` to read the raw summary at the END of pytest's
+        // output, but rtk pytest's compact summary sits at the TOP, so the
+        // consumer's slice chops it off (plus recall markers), costing the
+        // model extra rounds. Standalone `pytest …` is still rewritten.
+        pipeline_safety: PipelineSafety::None,
         rewrite_prefixes: &["python3 -m pytest", "python -m pytest", "pytest"],
         category: "Python",
         savings_pct: 90.0,

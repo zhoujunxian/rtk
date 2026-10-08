@@ -1628,7 +1628,10 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
             Err(e) => {
                 // Command not found — same behaviour as no-TOML path
                 core::tracking::record_parse_failure_silent(&raw_command, &error_message, false);
-                eprintln!("[rtk: {}]", e);
+                // Include the failing binary name: agents that mimic the rtk
+                // prefix (e.g. `rtk python …` on hosts without `python`) need
+                // to see WHICH command was not found to recover in one round.
+                eprintln!("[rtk: {}: {}]", args[0], e);
                 Ok(127)
             }
         }
@@ -1650,9 +1653,38 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
                 Ok(core::utils::exit_code_from_status(&s, &raw_command))
             }
             Err(e) => {
+                // P11: bare `python` missing → retry `python3`. Agent hosts
+                // commonly ship python3-only; mimicking agents write
+                // `rtk python -c …` after seeing rtk rewrites in history and
+                // then burn 2 rounds diagnosing the 127 (44-instance
+                // experiment: 12 occurrences). The substitution is announced
+                // on stderr so the behavior stays transparent.
+                if args[0] == "python"
+                    && matches!(e.raw_os_error(), Some(2))
+                {
+                    let retry = core::utils::resolved_command("python3")
+                        .args(&args[1..])
+                        .stdin(std::process::Stdio::inherit())
+                        .stdout(std::process::Stdio::inherit())
+                        .stderr(std::process::Stdio::inherit())
+                        .status();
+                    if let Ok(s2) = retry {
+                        eprintln!("[rtk: 'python' not found, executed 'python3']");
+                        timer.track_passthrough(
+                            &raw_command,
+                            &format!("rtk fallback python->python3: {}", raw_command),
+                        );
+                        core::tracking::record_parse_failure_silent(
+                            &raw_command, &error_message, true,
+                        );
+                        return Ok(core::utils::exit_code_from_status(&s2, &raw_command));
+                    }
+                }
                 core::tracking::record_parse_failure_silent(&raw_command, &error_message, false);
-                // Command not found or other OS error — single message, no duplicate Clap error
-                eprintln!("[rtk: {}]", e);
+                // Command not found or other OS error — single message, no duplicate Clap error.
+                // Name the failing binary so callers (and mimicking agents) can
+                // recover immediately instead of re-probing.
+                eprintln!("[rtk: {}: {}]", args[0], e);
                 Ok(127)
             }
         }

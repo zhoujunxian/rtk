@@ -114,7 +114,19 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
 
             let mut out = entries;
 
-            if let Some(hint) = hidden_hint(&truncated, &filtered) {
+            // P9: tiny overflow (≤3 hidden entries) — show them inline instead of
+            // emitting marker lines. Two marker lines ("(1 filtered)" + recall
+            // hint) cost more than the 1-3 hidden entries themselves, and hiding
+            // e.g. `build/` or `__pycache__/` behind a recall marker breaks agents
+            // that need exactly those entries (44-instance experiment: 28/85 ls
+            // calls hit this, each paying 2 marker lines for ~1 hidden entry).
+            let total_hidden = truncated.len() + filtered.len();
+            if total_hidden > 0 && total_hidden <= 3 {
+                for line in truncated.iter().chain(filtered.iter()) {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            } else if let Some(hint) = hidden_hint(&truncated, &filtered) {
                 out.push_str(&hint);
                 out.push('\n');
             }
@@ -349,7 +361,14 @@ fn compact_ls(
     }
 
     // Dirs first, then files — one compact line each
-    let mut all_lines: Vec<String> = Vec::with_capacity(dirs.len() + files.len());
+    // P4 optimization: small plain listings (<20 entries) skip size annotations
+    // to match native `ls` output exactly — avoids format change that costs
+    // more tokens than it saves. Long format (`-l`) always keeps sizes: the
+    // user explicitly asked for details there.
+    let total_entries = dirs.len() + files.len();
+    let add_size = show_long || total_entries >= 20;
+
+    let mut all_lines: Vec<String> = Vec::with_capacity(total_entries);
     for (name, octal) in &dirs {
         all_lines.push(match octal {
             Some(octal) => format!("{}  {}/", octal, name),
@@ -357,9 +376,11 @@ fn compact_ls(
         });
     }
     for (name, size, octal) in &files {
-        all_lines.push(match octal {
-            Some(octal) => format!("{}  {}  {}", octal, name, size),
-            None => format!("{}  {}", name, size),
+        all_lines.push(match (octal, add_size) {
+            (Some(o), true) => format!("{}  {}  {}", o, name, size),
+            (Some(o), false) => format!("{}  {}", o, name),
+            (None, true) => format!("{}  {}", name, size),
+            (None, false) => format!("{}", name),
         });
     }
 
@@ -395,13 +416,29 @@ mod tests {
         assert!(entries.contains("src/"));
         assert!(entries.contains("Cargo.toml"));
         assert!(entries.contains("README.md"));
-        assert!(entries.contains("1.2K")); // 1234 bytes
-        assert!(entries.contains("5.5K")); // 5678 bytes
+        // P4: small plain listings (<20 entries) skip size annotations —
+        // matches native `ls` exactly instead of inflating tokens.
+        assert!(!entries.contains("1.2K"));
+        assert!(!entries.contains("5.5K"));
         assert!(!entries.contains("drwx")); // no permissions
         assert!(!entries.contains("staff")); // no group
         assert!(!entries.contains("total")); // no total
         assert!(!entries.contains("\n.\n")); // no . entry
         assert!(!entries.contains("\n..\n")); // no .. entry
+    }
+
+    #[test]
+    fn test_compact_small_plain_listing_has_no_sizes_but_large_does() {
+        // P4 threshold: plain listing with 20+ entries keeps size annotations
+        let mut input = String::from("total 48\n");
+        for i in 0..20 {
+            input.push_str(&format!(
+                "-rw-r--r--  1 user  staff  {} Jan  1 12:00 file{i}.txt\n",
+                2048 + i
+            ));
+        }
+        let (entries, _parsed, _truncated, _hidden) = compact_ls(&input, false, false);
+        assert!(entries.contains("2.0K"), "large listing should keep sizes");
     }
 
     #[test]
@@ -682,13 +719,14 @@ mod tests {
             !entries.contains("16:18"),
             "time should not leak into filename, got: {entries}"
         );
+        // P4: small plain listing — no size annotations (matches native ls)
         assert!(
-            entries.contains("0B"),
-            "empty.txt should show 0B, got: {entries}"
+            !entries.contains("0B"),
+            "small listing should skip sizes, got: {entries}"
         );
         assert!(
-            entries.contains("1.2K"),
-            "data.json should show 1.2K (1234 bytes), got: {entries}"
+            !entries.contains("1.2K"),
+            "small listing should skip sizes, got: {entries}"
         );
     }
 
@@ -702,7 +740,7 @@ mod tests {
             entries.contains("archive.tar"),
             "should contain filename, got: {entries}"
         );
-        assert!(entries.contains("5.5K"), "should show 5.5K, got: {entries}");
+        assert!(!entries.contains("5.5K"), "small listing skips sizes (P4)");
     }
 
     #[test]
